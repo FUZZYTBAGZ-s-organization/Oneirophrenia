@@ -17,5 +17,6 @@ public class DamageOnHit : MonoBehaviour
             attacker.DealDamage(other.gameObject);
             Debug.Log("Hit " + other.name);
         }
+        
     }
 }
