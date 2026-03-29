@@ -15,9 +15,10 @@ public class HostileAI : MonoBehaviour
     [SerializeField] private LayerMask playerLayer;
 
     [Header("Patrol")]
-    [SerializeField] private float walkPointRange = 10f;
+    [SerializeField] private float waitTimeAtPoint = 1f; // pause at patrol point
     private Vector3 walkPoint;
     private bool walkPointSet;
+    private bool waitingAtPoint;
 
     [Header("Combat")]
     [SerializeField] private float timeBetweenAttacks = 1f;
@@ -31,6 +32,10 @@ public class HostileAI : MonoBehaviour
 
     private bool playerInSightRange;
     private bool playerInAttackRange;
+
+    // Stuck detection variables
+    private float stuckTimer = 0f; // Timer to track how long the agent is stuck
+    private float stuckThreshold = 2f; // Time threshold to consider the agent as stuck
 
     private void Awake()
     {
@@ -51,18 +56,23 @@ public class HostileAI : MonoBehaviour
         playerInSightRange = Physics.CheckSphere(transform.position, sightRange, playerLayer);
         playerInAttackRange = Physics.CheckSphere(transform.position, attackRange, playerLayer);
 
-        // State machine 
+        // State machine
         if (!playerInSightRange && !playerInAttackRange)
             Patrol();
         else if (playerInSightRange && !playerInAttackRange)
             Chase();
         else if (playerInAttackRange && playerInSightRange)
             Attack();
+
+        // Check if the agent is stuck and handle un-stucking
+        CheckIfStuck();
     }
 
     // ---------------- PATROL ----------------
     private void Patrol()
     {
+        if (waitingAtPoint) return;
+
         navAgent.isStopped = false;
 
         if (!walkPointSet)
@@ -71,27 +81,45 @@ public class HostileAI : MonoBehaviour
         if (walkPointSet)
             navAgent.SetDestination(walkPoint);
 
-        if (Vector3.Distance(transform.position, walkPoint) < 1f)
+        // Check if reached destination
+        if (!navAgent.pathPending && navAgent.remainingDistance <= navAgent.stoppingDistance)
+        {
             walkPointSet = false;
+            StartCoroutine(WaitAtPatrolPoint());
+        }
     }
 
     private void SearchWalkPoint()
     {
-        float randomZ = Random.Range(-walkPointRange, walkPointRange);
-        float randomX = Random.Range(-walkPointRange, walkPointRange);
-
-        Vector3 point = new Vector3(
-            transform.position.x + randomX,
-            transform.position.y,
-            transform.position.z + randomZ
-        );
-
-        // Ground check 
-        if (Physics.Raycast(point, Vector3.down, 2f, groundLayer))
+        // Pick a random point anywhere on the NavMesh (across the entire map)
+        for (int i = 0; i < 10; i++)
         {
-            walkPoint = point;
-            walkPointSet = true;
+            // Search for random points across the whole NavMesh area
+            Vector3 randomPoint = new Vector3(
+                Random.Range(-100f, 100f),  // Adjust these ranges based on your map size
+                0f,                         // Keep height constant or change based on the ground
+                Random.Range(-100f, 100f)
+            );
+
+            if (NavMesh.SamplePosition(randomPoint, out NavMeshHit hit, 10f, NavMesh.AllAreas))
+            {
+                walkPoint = hit.position;
+                walkPointSet = true;
+                return;
+            }
         }
+
+        // If no valid point found, stay at the current position
+        walkPointSet = false;
+    }
+
+    private IEnumerator WaitAtPatrolPoint()
+    {
+        waitingAtPoint = true;
+        navAgent.isStopped = true;
+        yield return new WaitForSeconds(Random.Range(waitTimeAtPoint, waitTimeAtPoint + 2f));
+        waitingAtPoint = false;
+        navAgent.isStopped = false;
     }
 
     // ---------------- CHASE ----------------
@@ -108,9 +136,11 @@ public class HostileAI : MonoBehaviour
     {
         navAgent.isStopped = true;
 
-        // Rotate the AI body only on the Y-axis (capsule stays upright)
+        if (player == null) return;
+
+        // Rotate the AI body only on the Y-axis
         Vector3 lookDir = player.position - transform.position;
-        lookDir.y = 0; // ignore vertical rotation
+        lookDir.y = 0;
         if (lookDir != Vector3.zero)
         {
             transform.rotation = Quaternion.Slerp(
@@ -120,7 +150,7 @@ public class HostileAI : MonoBehaviour
             );
         }
 
-        // Rotate the firePoint (or gun/upper body) to aim directly at the player
+        // Rotate firePoint to aim at player
         Vector3 targetDirection = player.position - firePoint.position;
         Quaternion targetRotation = Quaternion.LookRotation(targetDirection);
         firePoint.rotation = Quaternion.Slerp(
@@ -142,7 +172,6 @@ public class HostileAI : MonoBehaviour
         if (projectilePrefab == null || firePoint == null) return;
 
         GameObject bullet = Instantiate(projectilePrefab, firePoint.position, firePoint.rotation);
-
         Rigidbody rb = bullet.GetComponent<Rigidbody>();
         if (rb != null)
         {
@@ -156,6 +185,55 @@ public class HostileAI : MonoBehaviour
     private void ResetAttack()
     {
         alreadyAttacked = false;
+    }
+
+    // ---------------- UNSTUCK MECHANISM ----------------
+    private void CheckIfStuck()
+    {
+        // If the agent's velocity is too low and it hasn't reached the destination for a while, it might be stuck
+        if (navAgent.velocity.magnitude < 0.1f && navAgent.remainingDistance > 0.1f)
+        {
+            stuckTimer += Time.deltaTime;
+
+            // If the stuck timer exceeds the threshold, unstick the AI
+            if (stuckTimer >= stuckThreshold)
+            {
+                Debug.Log("AI is stuck, un-sticking...");
+                UnstuckAI();
+            }
+        }
+        else
+        {
+            stuckTimer = 0f; // Reset the timer if the agent is moving
+        }
+    }
+
+    private void UnstuckAI()
+    {
+        // Reset the path and stop the agent
+        navAgent.ResetPath();
+
+        // Optionally, move the AI a little bit to avoid being stuck in the same place
+        Vector3 randomDirection = Random.insideUnitSphere * 2f; // Move it by 2 units in a random direction
+        randomDirection.y = 0; // Keep it on the same ground level
+        Vector3 newPosition = transform.position + randomDirection;
+
+        // Ensure that the new position is on the NavMesh
+        NavMeshHit hit;
+        if (NavMesh.SamplePosition(newPosition, out hit, 2f, NavMesh.AllAreas))
+        {
+            navAgent.Warp(hit.position); // Instantly teleport the agent to the new position
+            Debug.Log("AI unstuck by teleporting.");
+        }
+        else
+        {
+            // If we can't find a valid point, just make the agent wander a bit
+            SearchWalkPoint();
+            navAgent.SetDestination(walkPoint);
+            Debug.Log("AI unstuck by wandering.");
+        }
+
+        stuckTimer = 0f; // Reset stuck timer after un-sticking
     }
 
     // ---------------- DEBUG ----------------

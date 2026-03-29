@@ -12,6 +12,18 @@ public class DamageOnHit : MonoBehaviour
         AttributesManager enemyAtm = other.GetComponent<AttributesManager>();
         AttributesManager targetAtm = other.GetComponent<AttributesManager>();
 
+        // Only damage the player
+        if (other.CompareTag("Player"))
+        {
+            AttributesManager playerAtm = other.GetComponent<AttributesManager>();
+
+            if (playerAtm != null)
+            {
+                playerAtm.TakeDamage(attacker.attack);
+                Debug.Log("Player took damage!");
+            }
+        }
+
         if (targetAtm != null && targetAtm != attacker)
         {
             attacker.DealDamage(other.gameObject);
