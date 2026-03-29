@@ -6,15 +6,31 @@ public class AttributesManager : MonoBehaviour
     public int health;
     public int attack;
 
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
+    public void TakeDamage(int amount)
     {
-        
+        health -= amount;
+        Debug.Log(gameObject.name + "health" + health);
+
+        if (health <= 0)
+        {
+            Die();
+        }
     }
 
-    // Update is called once per frame
-    void Update()
+    public void DealDamage(GameObject target)
     {
-        
+        var atm = target.GetComponent<AttributesManager>();
+        if (atm != null)
+        {
+            atm.TakeDamage(attack);
+        }
     }
+        private void Die()
+        {
+            Debug.Log(gameObject.name + "died");
+
+            Destroy(gameObject);
+        }
+    
 }
+    
