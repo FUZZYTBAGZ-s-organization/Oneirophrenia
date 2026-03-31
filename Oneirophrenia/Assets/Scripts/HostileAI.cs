@@ -1,50 +1,44 @@
-using System.Collections;
 using UnityEngine;
 using UnityEngine.AI;
 
 public class HostileAI : MonoBehaviour
 {
     [Header("References")]
-    [SerializeField] private NavMeshAgent navAgent;
-    [SerializeField] private Transform player;
-    [SerializeField] private Transform firePoint;
-    [SerializeField] private GameObject projectilePrefab;
+    public NavMeshAgent agent;
+    public Transform player;
 
-    [Header("Layer Masks")]
-    [SerializeField] private LayerMask groundLayer;
-    [SerializeField] private LayerMask playerLayer;
+    [Header("Detection")]
+    public float sightRange = 10f;
+    public LayerMask Ground, Player;
 
-    [Header("Patrol")]
-    [SerializeField] private float waitTimeAtPoint = 1f; // pause at patrol point
+    [Header("Patrol Settings")]
+    public float walkPointRange = 10f;
+    public float waitTimeAtPoint = 2f;
+
+    [Header("Investigation Settings")]
+    public float investigationTime = 3f;
+
+    [Header("Melee Attack Settings")]
+    public float attackRange = 2f;
+    public float attackCooldown = 1f;
+    private float lastAttackTime;
+
     private Vector3 walkPoint;
     private bool walkPointSet;
-    private bool waitingAtPoint;
+    private float waitTimer;
+    private bool investigating = false;
+    private float investigationTimer;
 
-    [Header("Combat")]
-    [SerializeField] private float timeBetweenAttacks = 1f;
-    private bool alreadyAttacked;
-    [SerializeField] private float shootForce = 10f;
-    [SerializeField] private float upwardForce = 5f;
+    // Variable for the investigation point - This should be declared at the class level
+    private Vector3 investigationPoint;     // The position that the AI will move to for investigation
 
-    [Header("Ranges")]
-    [SerializeField] private float sightRange = 20f;
-    [SerializeField] private float attackRange = 10f;
-
-    private bool playerInSightRange;
-    private bool playerInAttackRange;
-
-    // Stuck detection variables
-    private float stuckTimer = 0f; // Timer to track how long the agent is stuck
-    private float stuckThreshold = 2f; // Time threshold to consider the agent as stuck
-
-    private void Awake()
+    private void Start()
     {
-        if (navAgent == null)
-            navAgent = GetComponent<NavMeshAgent>();
+        agent = GetComponent<NavMeshAgent>();
 
         if (player == null)
         {
-            GameObject obj = GameObject.Find("Player");
+            GameObject obj = GameObject.FindGameObjectWithTag("Player");
             if (obj != null)
                 player = obj.transform;
         }
@@ -52,197 +46,159 @@ public class HostileAI : MonoBehaviour
 
     private void Update()
     {
-        // Check ranges
-        playerInSightRange = Physics.CheckSphere(transform.position, sightRange, playerLayer);
-        playerInAttackRange = Physics.CheckSphere(transform.position, attackRange, playerLayer);
-
-        // State machine
-        if (!playerInSightRange && !playerInAttackRange)
-            Patrol();
-        else if (playerInSightRange && !playerInAttackRange)
-            Chase();
-        else if (playerInAttackRange && playerInSightRange)
-            Attack();
-
-        // Check if the agent is stuck and handle un-stucking
-        CheckIfStuck();
-    }
-
-    // ---------------- PATROL ----------------
-    private void Patrol()
-    {
-        if (waitingAtPoint) return;
-
-        navAgent.isStopped = false;
-
-        if (!walkPointSet)
-            SearchWalkPoint();
-
-        if (walkPointSet)
-            navAgent.SetDestination(walkPoint);
-
-        // Check if reached destination
-        if (!navAgent.pathPending && navAgent.remainingDistance <= navAgent.stoppingDistance)
+        if (!agent.isOnNavMesh)
         {
-            walkPointSet = false;
-            StartCoroutine(WaitAtPatrolPoint());
+            Debug.LogError("NOT ON NAVMESH");
+            return;
+        }
+
+        float distanceToPlayer = Vector3.Distance(transform.position, player.position);
+
+        if (distanceToPlayer <= sightRange)
+        {
+            ChasePlayer();
+        }
+        else if (investigating)
+        {
+            Investigate();
+        }
+        else
+        {
+            Patroling();
+        }
+
+        // Melee attack when player is in range and attack cooldown has passed
+        if (distanceToPlayer <= attackRange && Time.time >= lastAttackTime + attackCooldown)
+        {
+            MeleeAttack();
         }
     }
 
-    private void SearchWalkPoint()
+    #region Patroling
+    void Patroling()
     {
-        // Pick a random point anywhere on the NavMesh (across the entire map)
-        for (int i = 0; i < 10; i++)
+        if (!walkPointSet)
         {
-            // Search for random points across the whole NavMesh area
+            SearchWalkPoint();
+            return;
+        }
+
+        agent.SetDestination(walkPoint);
+
+        if (!agent.pathPending && agent.remainingDistance <= agent.stoppingDistance)
+        {
+            waitTimer += Time.deltaTime;
+            if (waitTimer >= waitTimeAtPoint)
+            {
+                walkPointSet = false;
+                waitTimer = 0f;
+            }
+        }
+    }
+
+    void SearchWalkPoint()
+    {
+        int maxAttempts = 10;
+
+        for (int i = 0; i < maxAttempts; i++)
+        {
+            float randomX = Random.Range(-walkPointRange, walkPointRange);
+            float randomZ = Random.Range(-walkPointRange, walkPointRange);
+
             Vector3 randomPoint = new Vector3(
-                Random.Range(-100f, 100f),  // Adjust these ranges based on your map size
-                0f,                         // Keep height constant or change based on the ground
-                Random.Range(-100f, 100f)
+                transform.position.x + randomX,
+                transform.position.y + 20f,
+                transform.position.z + randomZ
             );
 
-            if (NavMesh.SamplePosition(randomPoint, out NavMeshHit hit, 10f, NavMesh.AllAreas))
+            if (Physics.Raycast(randomPoint, Vector3.down, out RaycastHit hit, 40f, Ground))
             {
-                walkPoint = hit.position;
-                walkPointSet = true;
-                return;
+                Vector3 candidate = hit.point;
+
+                if (NavMesh.SamplePosition(candidate, out NavMeshHit navHit, 2f, NavMesh.AllAreas))
+                {
+                    walkPoint = navHit.position;
+                    walkPointSet = true;
+                    return;
+                }
             }
         }
 
-        // If no valid point found, stay at the current position
         walkPointSet = false;
     }
+    #endregion
 
-    private IEnumerator WaitAtPatrolPoint()
+    #region Chasing
+    void ChasePlayer()
     {
-        waitingAtPoint = true;
-        navAgent.isStopped = true;
-        yield return new WaitForSeconds(Random.Range(waitTimeAtPoint, waitTimeAtPoint + 2f));
-        waitingAtPoint = false;
-        navAgent.isStopped = false;
+        agent.SetDestination(player.position);
+        investigating = false; // Stop investigating if chasing the player
+    }
+    #endregion
+
+    #region Investigation
+    public void TriggerInvestigation(Vector3 point)
+    {
+        investigationPoint = point;  // Set the location to investigate
+        investigating = true;        // Set investigating flag to true
+        agent.SetDestination(investigationPoint);  // Move the AI to the investigation point
+        investigationTimer = 0f;     // Reset the investigation timer
+        Debug.Log($"Investigation triggered at {investigationPoint}");
     }
 
-    // ---------------- CHASE ----------------
-    private void Chase()
+    void Investigate()
     {
-        navAgent.isStopped = false;
+        agent.SetDestination(investigationPoint);
 
-        if (player != null)
-            navAgent.SetDestination(player.position);
-    }
-
-    // ---------------- ATTACK ----------------
-    private void Attack()
-    {
-        navAgent.isStopped = true;
-
-        if (player == null) return;
-
-        // Rotate the AI body only on the Y-axis
-        Vector3 lookDir = player.position - transform.position;
-        lookDir.y = 0;
-        if (lookDir != Vector3.zero)
+        if (!agent.pathPending && agent.remainingDistance <= agent.stoppingDistance)
         {
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation,
-                Quaternion.LookRotation(lookDir),
-                Time.deltaTime * 5f
-            );
-        }
+            investigationTimer += Time.deltaTime; // Increment timer
 
-        // Rotate firePoint to aim at player
-        Vector3 targetDirection = player.position - firePoint.position;
-        Quaternion targetRotation = Quaternion.LookRotation(targetDirection);
-        firePoint.rotation = Quaternion.Slerp(
-            firePoint.rotation,
-            targetRotation,
-            Time.deltaTime * 10f
-        );
-
-        if (!alreadyAttacked)
-        {
-            Shoot();
-            alreadyAttacked = true;
-            Invoke(nameof(ResetAttack), timeBetweenAttacks);
-        }
-    }
-
-    private void Shoot()
-    {
-        if (projectilePrefab == null || firePoint == null) return;
-
-        GameObject bullet = Instantiate(projectilePrefab, firePoint.position, firePoint.rotation);
-        Rigidbody rb = bullet.GetComponent<Rigidbody>();
-        if (rb != null)
-        {
-            rb.AddForce(firePoint.forward * shootForce, ForceMode.Impulse);
-            rb.AddForce(firePoint.up * upwardForce, ForceMode.Impulse);
-        }
-
-        Destroy(bullet, 3f);
-    }
-
-    private void ResetAttack()
-    {
-        alreadyAttacked = false;
-    }
-
-    // ---------------- UNSTUCK MECHANISM ----------------
-    private void CheckIfStuck()
-    {
-        // If the agent's velocity is too low and it hasn't reached the destination for a while, it might be stuck
-        if (navAgent.velocity.magnitude < 0.1f && navAgent.remainingDistance > 0.1f)
-        {
-            stuckTimer += Time.deltaTime;
-
-            // If the stuck timer exceeds the threshold, unstick the AI
-            if (stuckTimer >= stuckThreshold)
+            if (investigationTimer >= investigationTime) // If investigation time is up
             {
-                Debug.Log("AI is stuck, un-sticking...");
-                UnstuckAI();
+                investigating = false; // Stop investigating
+                investigationTimer = 0f; // Reset timer
+                walkPointSet = false; // Ready to pick a new patrol point
+                Debug.Log("Investigation complete, resuming patrol");
             }
         }
-        else
-        {
-            stuckTimer = 0f; // Reset the timer if the agent is moving
-        }
     }
+    #endregion
 
-    private void UnstuckAI()
+    #region Melee Attack
+    void MeleeAttack()
     {
-        // Reset the path and stop the agent
-        navAgent.ResetPath();
-
-        // Optionally, move the AI a little bit to avoid being stuck in the same place
-        Vector3 randomDirection = Random.insideUnitSphere * 2f; // Move it by 2 units in a random direction
-        randomDirection.y = 0; // Keep it on the same ground level
-        Vector3 newPosition = transform.position + randomDirection;
-
-        // Ensure that the new position is on the NavMesh
-        NavMeshHit hit;
-        if (NavMesh.SamplePosition(newPosition, out hit, 2f, NavMesh.AllAreas))
+        Health playerHealth = player.GetComponent<Health>(); // Get the player's health component
+        if (playerHealth != null)
         {
-            navAgent.Warp(hit.position); // Instantly teleport the agent to the new position
-            Debug.Log("AI unstuck by teleporting.");
-        }
-        else
-        {
-            // If we can't find a valid point, just make the agent wander a bit
-            SearchWalkPoint();
-            navAgent.SetDestination(walkPoint);
-            Debug.Log("AI unstuck by wandering.");
+            playerHealth.TakeDamage(10f);  // Inflict damage (can adjust damage value)
         }
 
-        stuckTimer = 0f; // Reset stuck timer after un-sticking
+        lastAttackTime = Time.time; // Record the time of the attack
+        Debug.Log("AI attacked the player!");
     }
+    #endregion
 
-    // ---------------- DEBUG ----------------
-    private void OnDrawGizmosSelected()
+    #region Debug
+    void OnDrawGizmos()
     {
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(transform.position, sightRange);
+        if (walkPointSet)
+        {
+            Gizmos.color = Color.green;
+            Gizmos.DrawSphere(walkPoint, 0.3f);
+        }
 
-        Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position, attackRange);
+        if (investigating)
+        {
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawSphere(investigationPoint, 0.3f);  // Visualize the investigation point
+        }
+
+        if (player != null)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawLine(transform.position, player.position);
+        }
     }
+    #endregion
 }
