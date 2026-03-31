@@ -46,7 +46,11 @@ public class PlayerAnimations : MonoBehaviour
         bool forwardPressed = Input.GetKey("w");
         bool runPressed = Input.GetKey("left shift");
         bool JumpPressed = Input.GetKey("space");
+
+
         
+
+
 
         if (!IsWalking && forwardPressed)
         {

@@ -4,42 +4,52 @@ public class PlayerGun : MonoBehaviour
 {
     [Header("Gun Settings")]
     public float damage = 20f;               // Damage dealt by each shot
-    public float fireRate = 0.5f;            // Time between shots (fire rate)
-    public float range = 100f;               // Range of the gun's bullets
-    public Transform gunEnd;                 // Point where the gun's raycast starts (usually at the barrel)
+    public float fireRate = 0.5f;            // Minimum time between shots
+    public float range = 100f;               // Maximum distance the bullet can travel
+    public Transform gunEnd;                 // The point from where the raycast (bullet) starts, usually gun barrel
+    public Transform GunPosition;            // Optional reference for gun's position/animations
+    public GunRecoil gunRecoil;              // Reference to the recoil script
 
-    private float lastShootTime;             // Time of last shot (used for cooldown)
+    private float lastShootTime;             // Tracks when the gun was last fired
 
+    // ------------------------------
     void Update()
     {
+        // Check if enough time has passed to allow shooting again
         if (Time.time >= lastShootTime + fireRate)
         {
-            if (Input.GetMouseButton(0)) // Left-click to shoot
+            // Check if left mouse button is pressed
+            if (Input.GetMouseButton(0))
             {
-                Shoot();
+                Shoot(); // Fire the gun
             }
         }
     }
 
+    // ------------------------------
     void Shoot()
     {
-        lastShootTime = Time.time; // Update the last shoot time
+        // Update last shoot time to enforce cooldown
+        lastShootTime = Time.time;
 
+        // --- Apply recoil ---
+        if (gunRecoil != null)
+            gunRecoil.ShootRecoil(); // Add recoil effect to the gun
+
+        // --- Raycast shooting ---
         RaycastHit hit;
-        // Raycast to detect if we hit something in range
         if (Physics.Raycast(gunEnd.position, gunEnd.forward, out hit, range))
         {
+            // Print name of object hit (for debugging)
             Debug.Log("Hit: " + hit.collider.name);
 
-            // If the hit object has a Health component, apply damage
+            // Check if hit object has a Health component
             Health enemyHealth = hit.collider.GetComponent<Health>();
             if (enemyHealth != null)
-            {
-                enemyHealth.TakeDamage(damage);
-            }
+                enemyHealth.TakeDamage(damage); // Apply damage to enemy
         }
 
-        // Optional: Add a visual effect or sound for the gunshot
-        Debug.DrawRay(gunEnd.position, gunEnd.forward * range, Color.red, 0.1f); // Show a red line where the bullet hit
+        // Draw a temporary line in the Scene view to visualize the shot
+        Debug.DrawRay(gunEnd.position, gunEnd.forward * range, Color.red, 0.1f);
     }
 }
