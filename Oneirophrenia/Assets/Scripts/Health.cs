@@ -5,9 +5,12 @@ public class Health : MonoBehaviour
     public float maxHealth = 100f;  // Maximum health
     public float currentHealth;     // Current health
 
+    private HostileAI enemyAI;      // Reference to AI script (to disable it on death)
+
     void Start()
     {
         currentHealth = maxHealth;  // Set current health to max at the start
+        enemyAI = GetComponent<HostileAI>(); // Get reference to HostileAI script
     }
 
     // Method to take damage
@@ -23,8 +26,16 @@ public class Health : MonoBehaviour
     // Method for death logic
     void Die()
     {
+        // Disable AI behavior to prevent actions after death
+        if (enemyAI != null)
+        {
+            enemyAI.enabled = false; // Disable the AI script
+        }
+
         // You can implement death animations or other behaviors here
         Debug.Log($"{gameObject.name} died!");
-        Destroy(gameObject);  // For now, we just destroy the object when it dies
+
+        // Optionally, destroy the AI after a short delay
+        Destroy(gameObject, 1f); // Destroy after 1 second to give time for any animations
     }
 }
