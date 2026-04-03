@@ -2,74 +2,54 @@ using UnityEngine;
 
 public class PlayerGun : MonoBehaviour
 {
-    [Header("Gun Settings")]
-    public float damage = 20f;          // The damage dealt by each shot
-    public float fireRate = 0.5f;       // The minimum time between two shots
-    public float range = 100f;          // The maximum range the bullet can travel
-    public Transform gunEnd;            // The point from where the bullet starts (gun barrel tip)
-    public GunRecoil gunRecoil;         // Optional recoil script (used to add recoil effects)
+    public float damage = 20f;
+    public float fireRate = 0.5f;
+    public float range = 100f;
+    public Transform gunEnd;
+    public GunRecoil gunRecoil;
 
-    [Header("Alert Range")]
-    public float alertRange = 50f;      // The maximum distance for AI to hear the shot
+    public float alertRange = 50f;
+    public SanityManager sanityManager;
 
-    private float lastShootTime;        // Keeps track of the time when the gun was last fired
+    private float lastShootTime;
 
     void Update()
     {
-        // Check if enough time has passed since the last shot and if the left mouse button is pressed
-        if (Time.time >= lastShootTime + fireRate && Input.GetMouseButton(0))
-        {
-            Shoot();  // Call the Shoot method when the player clicks the mouse
-        }
+        if (Time.time >= lastShootTime + fireRate && Input.GetMouseButtonDown(0))
+            Shoot();
     }
 
     void Shoot()
     {
-        lastShootTime = Time.time;  // Update the last shoot time to enforce the cooldown
+        lastShootTime = Time.time;
 
-        // Apply recoil if we have a recoil script
         if (gunRecoil != null)
-            gunRecoil.ShootRecoil();  // This will apply the recoil effect to the gun
+            gunRecoil.ShootRecoil();
 
-        // Safety check: Ensure the gunEnd (the point where the bullet originates) is assigned
-        if (gunEnd == null)
-        {
-            Debug.LogWarning("gunEnd is not assigned! Alert skipped.");
-            return;  // If gunEnd is not assigned, don't proceed with shooting or alerting
-        }
+        if (gunEnd == null) return;
 
         RaycastHit hit;
-        Vector3 shotPosition = gunEnd.position; // Default shot position is gunEnd's position (the barrel tip)
+        Vector3 shotPosition = gunEnd.position;
 
-        // Perform a raycast to simulate the bullet's path
         if (Physics.Raycast(gunEnd.position, gunEnd.forward, out hit, range))
         {
-            shotPosition = hit.point; // If the ray hits something, update the shot position to the hit point
-
-            // If we hit an object with a Health script (e.g., an enemy), apply damage
+            shotPosition = hit.point;
             Health targetHealth = hit.collider.GetComponent<Health>();
             if (targetHealth != null)
-            {
-                targetHealth.TakeDamage(damage);  // Deal damage to the object (enemy)
-            }
+                targetHealth.TakeDamage(damage);
         }
 
-        // Only alert AI if the shot position is valid (not (0,0,0)) and if within the alert range
-        if (shotPosition != Vector3.zero)
+        // Increase alert range based on sanity
+        float sanityFactor = 1f - sanityManager.currentSanity / sanityManager.maxSanity;
+        float effectiveRange = alertRange * (1f + sanityFactor);
+
+        HostileAI[] enemies = FindObjectsOfType<HostileAI>();
+        foreach (HostileAI enemy in enemies)
         {
-            // Find all AI enemies in the scene
-            HostileAI[] enemies = FindObjectsOfType<HostileAI>();
-            foreach (HostileAI enemy in enemies)
-            {
-                // Check if the AI is within the alert range of the shot
-                if (Vector3.Distance(shotPosition, enemy.transform.position) <= alertRange)
-                {
-                    enemy.AlertToPosition(shotPosition);  // Alert the AI to the shot position
-                }
-            }
+            if (Vector3.Distance(shotPosition, enemy.transform.position) <= effectiveRange)
+                enemy.HearSound(shotPosition, 1f + sanityFactor);
         }
 
-        // Debugging: Draw a line in the Scene view to visualize the shot path
         Debug.DrawRay(gunEnd.position, gunEnd.forward * range, Color.red, 0.1f);
     }
 }
